@@ -1,0 +1,318 @@
+-- Create database
+CREATE DATABASE IF NOT EXISTS order_up_db
+  CHARACTER SET utf8mb4
+  COLLATE utf8mb4_unicode_ci;
+
+USE order_up_db;
+
+-- Use InnoDB for foreign keys
+SET NAMES utf8mb4;
+SET FOREIGN_KEY_CHECKS = 0;
+
+--------------------------------------------------
+-- 1. LOOKUP TABLES
+--------------------------------------------------
+
+CREATE TABLE roles (
+    role_id   TINYINT UNSIGNED PRIMARY KEY AUTO_INCREMENT,
+    name      VARCHAR(30) NOT NULL UNIQUE   -- 'admin', 'staff', 'customer'
+) ENGINE=InnoDB;
+
+CREATE TABLE order_statuses (
+    status_id   TINYINT UNSIGNED PRIMARY KEY AUTO_INCREMENT,
+    code        VARCHAR(30) NOT NULL UNIQUE,   -- PENDING, CONFIRMED, READY, COMPLETED, CANCELED, etc.
+    description VARCHAR(255) NOT NULL
+) ENGINE=InnoDB;
+
+--------------------------------------------------
+-- 2. SHARED TABLES (ADDRESSES, USERS)
+--------------------------------------------------
+
+CREATE TABLE addresses (
+    address_id  BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT,
+    line1       VARCHAR(120) NOT NULL,
+    line2       VARCHAR(120),
+    city        VARCHAR(80) NOT NULL,
+    county      VARCHAR(80),
+    postcode    VARCHAR(20),
+    country     VARCHAR(80) DEFAULT 'Ireland'
+) ENGINE=InnoDB;
+
+CREATE TABLE users (
+    user_id       BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT,
+    role_id       TINYINT UNSIGNED NOT NULL,
+    address_id    BIGINT UNSIGNED,
+    full_name     VARCHAR(120) NOT NULL,
+    email         VARCHAR(120) NOT NULL UNIQUE,
+    password_hash VARCHAR(255) NOT NULL,
+    phone         VARCHAR(30),
+    is_active     BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+                                            ON UPDATE CURRENT_TIMESTAMP,
+    CONSTRAINT fk_users_role
+        FOREIGN KEY (role_id) REFERENCES roles(role_id),
+    CONSTRAINT fk_users_address
+        FOREIGN KEY (address_id) REFERENCES addresses(address_id)
+        ON DELETE SET NULL
+) ENGINE=InnoDB;
+
+--------------------------------------------------
+-- 3. RESTAURANT & MENU STRUCTURE
+--------------------------------------------------
+
+CREATE TABLE restaurants (
+    restaurant_id BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT,
+    name          VARCHAR(120) NOT NULL,
+    email         VARCHAR(120),
+    phone         VARCHAR(30),
+    address_id    BIGINT UNSIGNED,
+    is_active     BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+                                              ON UPDATE CURRENT_TIMESTAMP,
+    CONSTRAINT fk_rest_addr
+        FOREIGN KEY (address_id) REFERENCES addresses(address_id)
+        ON DELETE SET NULL
+) ENGINE=InnoDB;
+
+CREATE TABLE menus (
+    menu_id        BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT,
+    restaurant_id  BIGINT UNSIGNED NOT NULL,
+    name           VARCHAR(120) NOT NULL,       -- e.g. Main Menu, Lunch Menu
+    is_active      BOOLEAN NOT NULL DEFAULT TRUE,
+    sort_order     INT UNSIGNED NOT NULL DEFAULT 1,
+    created_at     DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at     DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+                                              ON UPDATE CURRENT_TIMESTAMP,
+    CONSTRAINT fk_menu_restaurant
+        FOREIGN KEY (restaurant_id) REFERENCES restaurants(restaurant_id)
+        ON DELETE CASCADE
+) ENGINE=InnoDB;
+
+CREATE TABLE menu_categories (
+    category_id BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT,
+    menu_id     BIGINT UNSIGNED NOT NULL,
+    name        VARCHAR(120) NOT NULL,     -- Starters, Mains, Desserts, etc.
+    sort_order  INT UNSIGNED NOT NULL DEFAULT 1,
+    CONSTRAINT fk_cat_menu
+        FOREIGN KEY (menu_id) REFERENCES menus(menu_id)
+        ON DELETE CASCADE
+) ENGINE=InnoDB;
+
+CREATE TABLE menu_items (
+    item_id       BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT,
+    category_id   BIGINT UNSIGNED NOT NULL,
+    name          VARCHAR(160) NOT NULL,
+    description   VARCHAR(500),
+    image_url     VARCHAR(300),
+    price_cents   INT UNSIGNED NOT NULL,   -- store prices as cents (e.g. 899 = €8.99)
+    is_available  BOOLEAN NOT NULL DEFAULT TRUE,
+    sort_order    INT UNSIGNED NOT NULL DEFAULT 1,
+    CONSTRAINT fk_item_category
+        FOREIGN KEY (category_id) REFERENCES menu_categories(category_id)
+        ON DELETE CASCADE,
+    INDEX idx_item_category (category_id, sort_order)
+) ENGINE=InnoDB;
+
+CREATE TABLE menu_item_options (
+    option_id        BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT,
+    item_id          BIGINT UNSIGNED NOT NULL,
+    name             VARCHAR(120) NOT NULL,       -- e.g. "Add cheese", "Large", etc.
+    price_delta_cents INT NOT NULL DEFAULT 0,     -- can be +100, +200 etc.
+    is_required      BOOLEAN NOT NULL DEFAULT FALSE,
+    CONSTRAINT fk_opt_item
+        FOREIGN KEY (item_id) REFERENCES menu_items(item_id)
+        ON DELETE CASCADE
+) ENGINE=InnoDB;
+
+--------------------------------------------------
+-- 4. PAYMENTS
+--------------------------------------------------
+
+CREATE TABLE payments (
+    payment_id   BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT,
+    method       VARCHAR(30) NOT NULL,       -- CARD, CASH, STRIPE, etc.
+    amount_cents INT UNSIGNED NOT NULL,
+    status       VARCHAR(30) NOT NULL,       -- AUTHORIZED, CAPTURED, FAILED, REFUNDED
+    reference    VARCHAR(120),               -- Payment gateway ref / receipt
+    created_at   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB;
+
+--------------------------------------------------
+-- 5. ORDERS & ORDER LINES
+--------------------------------------------------
+
+CREATE TABLE orders (
+    order_id       BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT,
+    user_id        BIGINT UNSIGNED NOT NULL,
+    restaurant_id  BIGINT UNSIGNED NOT NULL,
+    status_id      TINYINT UNSIGNED NOT NULL,   -- FK to order_statuses
+    address_id     BIGINT UNSIGNED,             -- null for pickup
+    payment_id     BIGINT UNSIGNED,             -- set when paid
+    subtotal_cents INT UNSIGNED NOT NULL DEFAULT 0,
+    tax_cents      INT UNSIGNED NOT NULL DEFAULT 0,
+    delivery_cents INT UNSIGNED NOT NULL DEFAULT 0,
+    discount_cents INT UNSIGNED NOT NULL DEFAULT 0,
+    total_cents    INT UNSIGNED NOT NULL DEFAULT 0,
+    order_type     VARCHAR(20) NOT NULL DEFAULT 'PICKUP', -- PICKUP/DELIVERY
+    placed_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at     DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+                                               ON UPDATE CURRENT_TIMESTAMP,
+    CONSTRAINT fk_order_user
+        FOREIGN KEY (user_id) REFERENCES users(user_id),
+    CONSTRAINT fk_order_restaurant
+        FOREIGN KEY (restaurant_id) REFERENCES restaurants(restaurant_id),
+    CONSTRAINT fk_order_status
+        FOREIGN KEY (status_id) REFERENCES order_statuses(status_id),
+    CONSTRAINT fk_order_address
+        FOREIGN KEY (address_id) REFERENCES addresses(address_id)
+        ON DELETE SET NULL,
+    CONSTRAINT fk_order_payment
+        FOREIGN KEY (payment_id) REFERENCES payments(payment_id)
+        ON DELETE SET NULL,
+    INDEX idx_order_user_date (user_id, placed_at),
+    INDEX idx_order_rest_date (restaurant_id, placed_at)
+) ENGINE=InnoDB;
+
+CREATE TABLE order_items (
+    order_item_id    BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT,
+    order_id         BIGINT UNSIGNED NOT NULL,
+    item_id          BIGINT UNSIGNED NOT NULL,
+    item_name_snap   VARCHAR(160) NOT NULL,   -- snapshot name at time of order
+    unit_price_cents INT UNSIGNED NOT NULL,
+    quantity         INT UNSIGNED NOT NULL DEFAULT 1,
+    note             VARCHAR(255),
+    CONSTRAINT fk_order_item_order
+        FOREIGN KEY (order_id) REFERENCES orders(order_id)
+        ON DELETE CASCADE,
+    CONSTRAINT fk_order_item_menu_item
+        FOREIGN KEY (item_id) REFERENCES menu_items(item_id),
+    INDEX idx_oi_order (order_id)
+) ENGINE=InnoDB;
+
+CREATE TABLE order_item_options (
+    order_item_option_id BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT,
+    order_item_id        BIGINT UNSIGNED NOT NULL,
+    option_name_snap     VARCHAR(120) NOT NULL,  -- snapshot of option name
+    price_delta_cents    INT NOT NULL DEFAULT 0,
+    CONSTRAINT fk_oio_order_item
+        FOREIGN KEY (order_item_id) REFERENCES order_items(order_item_id)
+        ON DELETE CASCADE
+) ENGINE=InnoDB;
+
+SET FOREIGN_KEY_CHECKS = 1;
+
+
+
+
+USE order_up_db;
+
+SET FOREIGN_KEY_CHECKS = 0;
+
+----------------------------------------------------------
+-- 1. ROLES
+----------------------------------------------------------
+INSERT INTO roles (name) VALUES 
+('admin'),
+('staff'),
+('customer');
+
+----------------------------------------------------------
+-- 2. ORDER STATUSES
+----------------------------------------------------------
+INSERT INTO order_statuses (code, description) VALUES
+('PENDING', 'Order placed and awaiting confirmation'),
+('CONFIRMED', 'Order accepted by the restaurant'),
+('PREPARING', 'Order is being prepared'),
+('READY', 'Order is ready for pickup/delivery'),
+('COMPLETED', 'Order has been completed'),
+('CANCELED', 'Order has been canceled'),
+('REFUNDED', 'Payment refunded to the customer');
+
+----------------------------------------------------------
+-- 3. ADDRESSES
+----------------------------------------------------------
+INSERT INTO addresses (line1, city, county, postcode) VALUES
+('1 College Road', 'Galway', 'Galway', 'H91TEST');
+
+----------------------------------------------------------
+-- 4. USERS (Admin + Sample Customer)
+----------------------------------------------------------
+INSERT INTO users (role_id, address_id, full_name, email, password_hash, phone)
+VALUES
+(1, 1, 'Admin User', 'admin@orderup.ie', '$2y$10$abcdef...', '0831112233'),
+(3, 1, 'John Customer', 'john@example.com', '$2y$10$abcdef...', '0879998888');
+
+----------------------------------------------------------
+-- 5. RESTAURANT
+----------------------------------------------------------
+INSERT INTO restaurants (name, address_id, email, phone)
+VALUES ('Order Up Test Kitchen', 1, 'orderup@restaurant.ie', '091555666');
+
+----------------------------------------------------------
+-- 6. MENU
+----------------------------------------------------------
+INSERT INTO menus (restaurant_id, name, sort_order)
+VALUES (1, 'Main Menu', 1);
+
+----------------------------------------------------------
+-- 7. CATEGORIES
+----------------------------------------------------------
+INSERT INTO menu_categories (menu_id, name, sort_order) VALUES
+(1, 'Burgers', 1),
+(1, 'Sides', 2),
+(1, 'Drinks', 3);
+
+----------------------------------------------------------
+-- 8. MENU ITEMS
+----------------------------------------------------------
+-- Burgers
+INSERT INTO menu_items (category_id, name, description, price_cents, sort_order)
+VALUES
+((SELECT category_id FROM menu_categories WHERE name='Burgers'), 
+ 'Classic Burger', 'Beef patty, cheese, lettuce, tomato', 899, 1),
+
+((SELECT category_id FROM menu_categories WHERE name='Burgers'), 
+ 'Chicken Burger', 'Grilled chicken breast with mayo', 949, 2);
+
+-- Sides
+INSERT INTO menu_items (category_id, name, description, price_cents, sort_order)
+VALUES
+((SELECT category_id FROM menu_categories WHERE name='Sides'), 
+ 'French Fries', 'Crispy golden fries', 299, 1),
+
+((SELECT category_id FROM menu_categories WHERE name='Sides'), 
+ 'Onion Rings', 'Beer-battered rings', 349, 2);
+
+-- Drinks
+INSERT INTO menu_items (category_id, name, description, price_cents, sort_order)
+VALUES
+((SELECT category_id FROM menu_categories WHERE name='Drinks'), 
+ 'Cola', '330ml can', 199, 1),
+
+((SELECT category_id FROM menu_categories WHERE name='Drinks'), 
+ 'Bottled Water', 'Still water (500ml)', 149, 2);
+
+----------------------------------------------------------
+-- 9. ITEM OPTIONS
+----------------------------------------------------------
+
+-- Classic Burger options
+INSERT INTO menu_item_options (item_id, name, price_delta_cents, is_required)
+VALUES
+((SELECT item_id FROM menu_items WHERE name='Classic Burger'), 'Add Cheese', 100, FALSE),
+((SELECT item_id FROM menu_items WHERE name='Classic Burger'), 'Extra Patty', 250, FALSE),
+((SELECT item_id FROM menu_items WHERE name='Classic Burger'), 'Large Meal Upgrade', 200, FALSE);
+
+-- Fries options
+INSERT INTO menu_item_options (item_id, name, price_delta_cents, is_required)
+VALUES
+((SELECT item_id FROM menu_items WHERE name='French Fries'), 'Large Size', 100, FALSE);
+
+-- Drinks options
+INSERT INTO menu_item_options (item_id, name, price_delta_cents, is_required)
+VALUES
+((SELECT item_id FROM menu_items WHERE name='Cola'), 'Large Cup', 50, FALSE);
+
+SET FOREIGN_KEY_CHECKS = 1;
