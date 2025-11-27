@@ -60,7 +60,7 @@ Version Control: GitHub
 Design: Figma
 
 Following the agile SRCUM method we orgainised the workload into sprints containing 12-14 story points per sprint.
-We used jira to create our sprints assign the workload and create our burn down chart allowing us all to see what work needed to be completed and when it was needed by.
+We used jira to create our sprints assign the workload and create our burn down chart allowing us all to see what work needed to be completed and when it was needed by. Images from our Jira and Microsoft Project can be found on the github page.
 
 Sprint	Focus Features
 Sprint 1	User Login & Registration, Database Setup
